@@ -5,6 +5,7 @@ import {
 import type { BackgroundTaskMetadata } from '@services/backgroundTasks/contracts';
 import { getMMKVObject } from '@utils/mmkv/mmkv';
 import { updateNovel } from '../LibraryUpdateQueries';
+import { showToast } from '@utils/showToast';
 import { updateLibrary } from '../index';
 
 jest.mock('@database/queries/LibraryQueries', () => ({
@@ -38,6 +39,7 @@ jest.mock('@hooks/persisted/useSettings', () => ({
 const mockedGetLibraryNovels = jest.mocked(getLibraryNovelsForGlobalUpdate);
 const mockedGetLibraryWithCategory = jest.mocked(getLibraryWithCategory);
 const mockedUpdateNovel = jest.mocked(updateNovel);
+const mockedShowToast = jest.mocked(showToast);
 const mockedGetMMKVObject = jest.mocked(getMMKVObject);
 
 type LibraryNovel = Awaited<
@@ -281,5 +283,61 @@ describe('updateLibrary', () => {
       progress: 1,
       progressText: undefined,
     });
+  });
+
+  it('stops only the paused source queue on SourceUpdatePaused with a single toast', async () => {
+    const novels = [
+      novel(1, 'source-a', 'A One'),
+      novel(2, 'source-a', 'A Two'),
+      novel(3, 'source-a', 'A Three'),
+      novel(4, 'source-b', 'B One'),
+      novel(5, 'source-b', 'B Two'),
+    ];
+    mockedGetLibraryNovels.mockResolvedValue(novels);
+
+    mockedUpdateNovel.mockImplementation(async (pluginId, _path, novelId) => {
+      if (pluginId === 'source-a' && novelId === 1) {
+        const error = new Error('Source A paused to avoid rate limits.');
+        error.name = 'SourceUpdatePaused';
+        throw error;
+      }
+    });
+
+    let metadata: BackgroundTaskMetadata = {
+      name: 'Update library',
+      isRunning: false,
+      progress: undefined,
+      progressText: undefined,
+    };
+    const progressValues: (number | undefined)[] = [];
+    const setMeta = (
+      transform: (meta: BackgroundTaskMetadata) => BackgroundTaskMetadata,
+    ) => {
+      metadata = transform(metadata);
+      progressValues.push(metadata.progress);
+    };
+
+    await updateLibrary({}, setMeta, jest.fn());
+
+    expect(
+      mockedUpdateNovel.mock.calls.map(([pluginId, , novelId]) => [
+        pluginId,
+        novelId,
+      ]),
+    ).toEqual([
+      ['source-a', 1],
+      ['source-b', 4],
+      ['source-b', 5],
+    ]);
+    expect(mockedShowToast).toHaveBeenCalledTimes(1);
+    expect(mockedShowToast).toHaveBeenCalledWith(
+      'Source A paused to avoid rate limits.',
+    );
+    expect(metadata).toMatchObject({
+      isRunning: false,
+      progress: 1,
+      progressText: undefined,
+    });
+    expect(progressValues).toContain(1);
   });
 });

@@ -5,6 +5,7 @@ import {
 
 import { showToast } from '../../utils/showToast';
 import { updateNovel, type UpdateNovelOptions } from './LibraryUpdateQueries';
+import { isSourceUpdatePausedError } from './sourceUpdateControl';
 import type { DBNovelInfo } from '@database/types';
 import { sleep } from '@utils/sleep';
 import { MMKVStorage, getMMKVObject } from '@utils/mmkv/mmkv';
@@ -135,23 +136,34 @@ const updateLibrary = async (
       };
 
       const updateSourceQueue = async (sourceQueue: DBNovelInfo[]) => {
-        for (const novel of sourceQueue) {
+        for (let index = 0; index < sourceQueue.length; index++) {
+          const novel = sourceQueue[index];
           activeNovels.set(novel.pluginId, novel.name);
           publishProgress();
 
+          let paused = false;
           try {
             await updateNovel(novel.pluginId, novel.path, novel.id, options);
             await sleep(1000);
           } catch (error: unknown) {
-            showToast(
-              novel.name +
-                ': ' +
-                (error instanceof Error ? error.message : String(error)),
-            );
+            if (isSourceUpdatePausedError(error)) {
+              paused = true;
+              showToast(error instanceof Error ? error.message : String(error));
+            } else {
+              showToast(
+                novel.name +
+                  ': ' +
+                  (error instanceof Error ? error.message : String(error)),
+              );
+            }
           } finally {
-            completedNovels += 1;
+            completedNovels += paused ? sourceQueue.length - index : 1;
             activeNovels.delete(novel.pluginId);
             publishProgress();
+          }
+
+          if (paused) {
+            break;
           }
         }
       };
