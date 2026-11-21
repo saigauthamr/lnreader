@@ -76,6 +76,7 @@ export interface FilteredSourceQueue {
 export const filterSourceQueueWithPlugin = async (
   pluginId: string,
   sourceQueue: DBNovelInfo[],
+  onProgress?: (statusText: string) => void,
 ): Promise<FilteredSourceQueue> => {
   const plugin = getPlugin(pluginId);
   if (typeof plugin?.checkLibraryUpdates !== 'function') {
@@ -94,8 +95,24 @@ export const filterSourceQueueWithPlugin = async (
     totalChapters: novel.totalChapters ?? undefined,
   }));
 
+  let progressError: unknown;
+  const reportProgress = onProgress
+    ? (statusText: string) => {
+        try {
+          onProgress(statusText);
+        } catch (error) {
+          progressError = error;
+          throw error;
+        }
+      }
+    : undefined;
+
   try {
-    const pathsToUpdate = await plugin.checkLibraryUpdates(candidates);
+    reportProgress?.(plugin.name || pluginId);
+    const pathsToUpdate = await plugin.checkLibraryUpdates(
+      candidates,
+      reportProgress ? { onProgress: reportProgress } : undefined,
+    );
     if (!Array.isArray(pathsToUpdate)) {
       return {
         queue: sourceQueue,
@@ -114,6 +131,9 @@ export const filterSourceQueueWithPlugin = async (
       filteredByPlugin: true,
     };
   } catch (error: unknown) {
+    if (progressError !== undefined) {
+      throw progressError;
+    }
     if (isSourceUpdatePausedError(error)) {
       throw error;
     }

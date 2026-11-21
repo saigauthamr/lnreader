@@ -386,6 +386,7 @@ describe('updateLibrary', () => {
         expect.objectContaining({ path: '/A Two', name: 'A Two' }),
         expect.objectContaining({ path: '/A Three', name: 'A Three' }),
       ]),
+      expect.objectContaining({ onProgress: expect.any(Function) }),
     );
     expect(mockedUpdateNovel).toHaveBeenCalledTimes(1);
     expect(mockedUpdateNovel).toHaveBeenCalledWith(
@@ -471,5 +472,47 @@ describe('updateLibrary', () => {
     expect(mockedShowToast).toHaveBeenCalledWith(
       'Source paused during batch check.',
     );
+  });
+
+  it('reports batch pre-filter progress and aborts immediately when task is cancelled', async () => {
+    const novels = [
+      novel(1, 'source-a', 'A One'),
+      novel(2, 'source-a', 'A Two'),
+    ];
+    mockedGetLibraryNovels.mockResolvedValue(novels);
+
+    const progressUpdates: (string | undefined)[] = [];
+    const checkLibraryUpdates = jest.fn(async (_candidates, options) => {
+      options?.onProgress?.('Source A: scanning page 1');
+      options?.onProgress?.('Source A: scanning page 2');
+      return [];
+    });
+    mockedGetPlugin.mockReturnValue({
+      name: 'Source A',
+      checkLibraryUpdates,
+    } as unknown as ReturnType<typeof getPlugin>);
+
+    let metadata: BackgroundTaskMetadata = {
+      name: 'Updating Library',
+      isRunning: false,
+      progress: 0,
+      progressText: undefined,
+    };
+    const setMeta = (
+      transform: (meta: BackgroundTaskMetadata) => BackgroundTaskMetadata,
+    ) => {
+      metadata = transform(metadata);
+      progressUpdates.push(metadata.progressText);
+      if (metadata.progressText === 'Source A: scanning page 2') {
+        throw new Error('Background task cancel');
+      }
+    };
+
+    await expect(updateLibrary({}, setMeta, jest.fn())).rejects.toThrow(
+      'Background task cancel',
+    );
+    expect(progressUpdates).toContain('Source A');
+    expect(progressUpdates).toContain('Source A: scanning page 1');
+    expect(mockedUpdateNovel).not.toHaveBeenCalled();
   });
 });

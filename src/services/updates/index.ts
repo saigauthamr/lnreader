@@ -157,7 +157,12 @@ const updateLibrary = async (
           const filtered = await filterSourceQueueWithPlugin(
             pluginId,
             sourceQueue,
+            statusText => {
+              activeNovels.set(pluginId, statusText);
+              publishProgress();
+            },
           );
+          activeNovels.delete(pluginId);
           queue = filtered.queue;
           filteredByPlugin = filtered.filteredByPlugin;
           if (filtered.skippedCount > 0) {
@@ -165,12 +170,14 @@ const updateLibrary = async (
             publishProgress();
           }
         } catch (error: unknown) {
+          activeNovels.delete(pluginId);
           if (isSourceUpdatePausedError(error)) {
             showToast(error instanceof Error ? error.message : String(error));
             completedNovels += sourceQueue.length;
             publishProgress();
             return;
           }
+          throw error;
         }
 
         if (!filteredByPlugin) {

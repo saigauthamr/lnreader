@@ -105,6 +105,10 @@ export interface ParseNovelOptions {
   isBackground?: boolean;
 }
 
+export interface LibraryUpdateCheckOptions {
+  onProgress?: (statusText: string) => void;
+}
+
 // this is for display in available plugins
 export interface PluginItem {
   id: string;
@@ -141,6 +145,7 @@ export interface Plugin extends PluginItem {
   ) => Promise<SourceNovel>;
   checkLibraryUpdates?: (
     novels: LibraryUpdateCandidate[],
+    options?: LibraryUpdateCheckOptions,
   ) => Promise<string[] | undefined>;
   parsePage?: (novelPath: string, page: string) => Promise<SourcePage>;
   parseChapter: (chapterPath: string) => Promise<string>;
