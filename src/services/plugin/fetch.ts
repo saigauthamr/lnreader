@@ -1,6 +1,6 @@
 import { getPlugin } from '@plugins/pluginManager';
 import { isUrlAbsolute } from '@plugins/helpers/isAbsoluteUrl';
-import { ChapterItem } from '@plugins/types';
+import { ChapterItem, ParseNovelOptions } from '@plugins/types';
 
 function formatChapters<T extends ChapterItem[] | undefined>(chapters: T): T {
   if (!chapters) {
@@ -17,12 +17,18 @@ function formatChapters<T extends ChapterItem[] | undefined>(chapters: T): T {
   }) as T;
 }
 
-export const fetchNovel = async (pluginId: string, novelPath: string) => {
+export const fetchNovel = async (
+  pluginId: string,
+  novelPath: string,
+  options?: ParseNovelOptions,
+) => {
   const plugin = getPlugin(pluginId);
   if (!plugin) {
     throw new Error(`Unknown plugin: ${pluginId}`);
   }
-  const res = await plugin.parseNovel(novelPath);
+  const res = options
+    ? await plugin.parseNovel(novelPath, options)
+    : await plugin.parseNovel(novelPath);
   if (res?.chapters) {
     res.chapters = formatChapters(res.chapters);
   }

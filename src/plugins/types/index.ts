@@ -93,6 +93,18 @@ export interface PopularNovelsOptions<Q extends Filters> {
   filters?: FilterToValues<Q>;
 }
 
+export interface LibraryUpdateCandidate {
+  path: string;
+  name: string;
+  lastUpdatedAt?: string | null;
+  status?: string | null;
+  totalChapters?: number;
+}
+
+export interface ParseNovelOptions {
+  isBackground?: boolean;
+}
+
 // this is for display in available plugins
 export interface PluginItem {
   id: string;
@@ -123,7 +135,13 @@ export interface Plugin extends PluginItem {
     pageNo: number,
     options?: PopularNovelsOptions<Filters>,
   ) => Promise<NovelItem[]>;
-  parseNovel: (novelPath: string) => Promise<SourceNovel>;
+  parseNovel: (
+    novelPath: string,
+    options?: ParseNovelOptions,
+  ) => Promise<SourceNovel>;
+  checkLibraryUpdates?: (
+    novels: LibraryUpdateCandidate[],
+  ) => Promise<string[] | undefined>;
   parsePage?: (novelPath: string, page: string) => Promise<SourcePage>;
   parseChapter: (chapterPath: string) => Promise<string>;
   searchNovels: (searchTerm: string, pageNo: number) => Promise<NovelItem[]>;

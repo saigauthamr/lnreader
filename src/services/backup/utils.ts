@@ -1,6 +1,7 @@
 import { SELF_HOST_BACKUP } from '@hooks/persisted/useSelfHost';
 import { OLD_TRACKED_NOVEL_PREFIX } from '@hooks/persisted/migrations/trackerMigration';
 import { LAST_UPDATE_TIME } from '@hooks/persisted/useUpdates';
+import { UPDATE_RESUME_CURSORS_KEY } from '@services/updates/sourceUpdateControl';
 import { MMKVStorage } from '@utils/mmkv/mmkv';
 import { version } from '../../../package.json';
 import {
@@ -149,6 +150,7 @@ const backupMMKVData = () => {
     OLD_TRACKED_NOVEL_PREFIX,
     SELF_HOST_BACKUP,
     LAST_UPDATE_TIME,
+    UPDATE_RESUME_CURSORS_KEY,
     INSTALLED_PLUGINS_KEY,
   ];
   const keys = MMKVStorage.getAllKeys().filter(

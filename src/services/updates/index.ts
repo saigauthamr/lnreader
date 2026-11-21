@@ -5,7 +5,15 @@ import {
 
 import { showToast } from '../../utils/showToast';
 import { updateNovel, type UpdateNovelOptions } from './LibraryUpdateQueries';
-import { isSourceUpdatePausedError } from './sourceUpdateControl';
+import {
+  clearResumeCursor,
+  filterSourceQueueWithPlugin,
+  getResumeCursor,
+  getResumeCursorKey,
+  isSourceUpdatePausedError,
+  rotateQueueFromCursor,
+  setResumeCursor,
+} from './sourceUpdateControl';
 import type { DBNovelInfo } from '@database/types';
 import { sleep } from '@utils/sleep';
 import { MMKVStorage, getMMKVObject } from '@utils/mmkv/mmkv';
@@ -105,6 +113,7 @@ const updateLibrary = async (
   const options: UpdateNovelOptions = {
     downloadNewChapters: downloadNewChapters || false,
     refreshNovelMetadata: refreshNovelMetadata || false,
+    isBackground: true,
     enqueue: tasks => enqueueDownloadTasks(enqueue, tasks),
   };
 
@@ -136,18 +145,53 @@ const updateLibrary = async (
       };
 
       const updateSourceQueue = async (sourceQueue: DBNovelInfo[]) => {
-        for (let index = 0; index < sourceQueue.length; index++) {
-          const novel = sourceQueue[index];
+        if (!sourceQueue.length) {
+          return;
+        }
+        const pluginId = sourceQueue[0].pluginId;
+        const cursorKey = getResumeCursorKey(pluginId, categoryId);
+
+        let queue = sourceQueue;
+        let filteredByPlugin = false;
+        try {
+          const filtered = await filterSourceQueueWithPlugin(
+            pluginId,
+            sourceQueue,
+          );
+          queue = filtered.queue;
+          filteredByPlugin = filtered.filteredByPlugin;
+          if (filtered.skippedCount > 0) {
+            completedNovels += filtered.skippedCount;
+            publishProgress();
+          }
+        } catch (error: unknown) {
+          if (isSourceUpdatePausedError(error)) {
+            showToast(error instanceof Error ? error.message : String(error));
+            completedNovels += sourceQueue.length;
+            publishProgress();
+            return;
+          }
+        }
+
+        if (!filteredByPlugin) {
+          queue = rotateQueueFromCursor(queue, getResumeCursor(cursorKey));
+        }
+
+        let paused = false;
+        for (let index = 0; index < queue.length; index++) {
+          const novel = queue[index];
           activeNovels.set(novel.pluginId, novel.name);
           publishProgress();
 
-          let paused = false;
           try {
             await updateNovel(novel.pluginId, novel.path, novel.id, options);
             await sleep(1000);
           } catch (error: unknown) {
             if (isSourceUpdatePausedError(error)) {
               paused = true;
+              if (!filteredByPlugin) {
+                setResumeCursor(cursorKey, novel.path);
+              }
               showToast(error instanceof Error ? error.message : String(error));
             } else {
               showToast(
@@ -157,7 +201,7 @@ const updateLibrary = async (
               );
             }
           } finally {
-            completedNovels += paused ? sourceQueue.length - index : 1;
+            completedNovels += paused ? queue.length - index : 1;
             activeNovels.delete(novel.pluginId);
             publishProgress();
           }
@@ -165,6 +209,10 @@ const updateLibrary = async (
           if (paused) {
             break;
           }
+        }
+
+        if (!paused && !filteredByPlugin) {
+          clearResumeCursor(cursorKey);
         }
       };
 

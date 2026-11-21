@@ -3,7 +3,9 @@ import {
   getLibraryWithCategory,
 } from '@database/queries/LibraryQueries';
 import type { BackgroundTaskMetadata } from '@services/backgroundTasks/contracts';
-import { getMMKVObject } from '@utils/mmkv/mmkv';
+import { getPlugin } from '@plugins/pluginManager';
+import { getMMKVObject, setMMKVObject } from '@utils/mmkv/mmkv';
+import { sleep } from '@utils/sleep';
 import { updateNovel } from '../LibraryUpdateQueries';
 import { showToast } from '@utils/showToast';
 import { updateLibrary } from '../index';
@@ -21,9 +23,13 @@ jest.mock('@utils/sleep', () => ({
 jest.mock('@utils/showToast', () => ({
   showToast: jest.fn(),
 }));
+jest.mock('@plugins/pluginManager', () => ({
+  getPlugin: jest.fn(),
+}));
 jest.mock('@utils/mmkv/mmkv', () => ({
   MMKVStorage: { set: jest.fn() },
   getMMKVObject: jest.fn(() => ({})),
+  setMMKVObject: jest.fn(),
 }));
 jest.mock('@hooks/persisted/useUpdates', () => ({
   LAST_UPDATE_TIME: 'LAST_UPDATE_TIME',
@@ -41,6 +47,9 @@ const mockedGetLibraryWithCategory = jest.mocked(getLibraryWithCategory);
 const mockedUpdateNovel = jest.mocked(updateNovel);
 const mockedShowToast = jest.mocked(showToast);
 const mockedGetMMKVObject = jest.mocked(getMMKVObject);
+const mockedSetMMKVObject = jest.mocked(setMMKVObject);
+const mockedGetPlugin = jest.mocked(getPlugin);
+const mockedSleep = jest.mocked(sleep);
 
 type LibraryNovel = Awaited<
   ReturnType<typeof getLibraryNovelsForGlobalUpdate>
@@ -60,6 +69,7 @@ describe('updateLibrary', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockedGetMMKVObject.mockReturnValue({});
+    mockedGetPlugin.mockReturnValue(undefined);
   });
 
   it('updates at most three different sources while keeping each source sequential', async () => {
@@ -339,5 +349,127 @@ describe('updateLibrary', () => {
       progressText: undefined,
     });
     expect(progressValues).toContain(1);
+  });
+
+  it('uses plugin checkLibraryUpdates to skip unchanged novels with zero sleep', async () => {
+    const novels = [
+      novel(1, 'source-a', 'A One'),
+      novel(2, 'source-a', 'A Two'),
+      novel(3, 'source-a', 'A Three'),
+    ];
+    mockedGetLibraryNovels.mockResolvedValue(novels);
+
+    const checkLibraryUpdates = jest.fn().mockResolvedValue(['/A Two']);
+    mockedGetPlugin.mockReturnValue({
+      checkLibraryUpdates,
+    } as unknown as ReturnType<typeof getPlugin>);
+    mockedUpdateNovel.mockResolvedValue(undefined);
+
+    let metadata: BackgroundTaskMetadata = {
+      name: 'Update library',
+      isRunning: false,
+      progress: undefined,
+      progressText: undefined,
+    };
+    const setMeta = (
+      transform: (meta: BackgroundTaskMetadata) => BackgroundTaskMetadata,
+    ) => {
+      metadata = transform(metadata);
+    };
+
+    await updateLibrary({}, setMeta, jest.fn());
+
+    expect(checkLibraryUpdates).toHaveBeenCalledTimes(1);
+    expect(checkLibraryUpdates).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ path: '/A One', name: 'A One' }),
+        expect.objectContaining({ path: '/A Two', name: 'A Two' }),
+        expect.objectContaining({ path: '/A Three', name: 'A Three' }),
+      ]),
+    );
+    expect(mockedUpdateNovel).toHaveBeenCalledTimes(1);
+    expect(mockedUpdateNovel).toHaveBeenCalledWith(
+      'source-a',
+      '/A Two',
+      2,
+      expect.objectContaining({ isBackground: true }),
+    );
+    expect(mockedSleep).toHaveBeenCalledTimes(1);
+    expect(metadata).toMatchObject({
+      isRunning: false,
+      progress: 1,
+      progressText: undefined,
+    });
+  });
+
+  it('resumes from the paused novel on the next sweep and clears the cursor on completion', async () => {
+    const novels = [
+      novel(1, 'source-a', 'A One'),
+      novel(2, 'source-a', 'A Two'),
+      novel(3, 'source-a', 'A Three'),
+    ];
+    mockedGetLibraryNovels.mockResolvedValue(novels);
+
+    const mmkvStore: Record<string, unknown> = {};
+    mockedGetMMKVObject.mockImplementation(
+      (key: string) => mmkvStore[key] as never,
+    );
+    mockedSetMMKVObject.mockImplementation((key: string, value: unknown) => {
+      mmkvStore[key] = value;
+    });
+
+    // First sweep pauses on A Two -> cursor saved at /A Two.
+    mockedUpdateNovel.mockImplementation(async (_pluginId, _path, novelId) => {
+      if (novelId === 2) {
+        const error = new Error('Paused after budget.');
+        error.name = 'SourceUpdatePaused';
+        throw error;
+      }
+    });
+
+    await updateLibrary({}, jest.fn(), jest.fn());
+
+    expect(mockedUpdateNovel.mock.calls.map(([, path]) => path)).toEqual([
+      '/A One',
+      '/A Two',
+    ]);
+    expect(mmkvStore.UPDATE_RESUME_CURSORS).toEqual({
+      'source-a': '/A Two',
+    });
+
+    // Second sweep rotates to start at A Two -> A Three -> A One and clears cursor.
+    mockedUpdateNovel.mockReset();
+    mockedUpdateNovel.mockResolvedValue(undefined);
+
+    await updateLibrary({}, jest.fn(), jest.fn());
+
+    expect(mockedUpdateNovel.mock.calls.map(([, path]) => path)).toEqual([
+      '/A Two',
+      '/A Three',
+      '/A One',
+    ]);
+    expect(mmkvStore.UPDATE_RESUME_CURSORS).toEqual({});
+  });
+
+  it('handles SourceUpdatePaused thrown by checkLibraryUpdates cleanly', async () => {
+    const novels = [
+      novel(1, 'source-a', 'A One'),
+      novel(2, 'source-a', 'A Two'),
+    ];
+    mockedGetLibraryNovels.mockResolvedValue(novels);
+
+    const pauseError = new Error('Source paused during batch check.');
+    pauseError.name = 'SourceUpdatePaused';
+    mockedGetPlugin.mockReturnValue({
+      checkLibraryUpdates: jest.fn().mockRejectedValue(pauseError),
+    } as unknown as ReturnType<typeof getPlugin>);
+
+    await updateLibrary({}, jest.fn(), jest.fn());
+
+    expect(mockedUpdateNovel).not.toHaveBeenCalled();
+    expect(mockedShowToast).toHaveBeenCalledTimes(1);
+    expect(mockedShowToast).toHaveBeenCalledWith(
+      'Source paused during batch check.',
+    );
   });
 });

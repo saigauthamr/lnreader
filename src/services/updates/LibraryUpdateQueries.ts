@@ -161,6 +161,7 @@ const updateNovelChapters = async (
 export interface UpdateNovelOptions {
   downloadNewChapters?: boolean;
   refreshNovelMetadata?: boolean;
+  isBackground?: boolean;
   enqueue?: BackgroundTaskEnqueuer;
 }
 
@@ -186,11 +187,16 @@ const updateNovel = async (
   if (pluginId === LOCAL_PLUGIN_ID) {
     return;
   }
-  const { downloadNewChapters, refreshNovelMetadata, enqueue } = options;
+  const { downloadNewChapters, refreshNovelMetadata, isBackground, enqueue } =
+    options;
 
   const oldTotalPages = await getStoredTotalPages(novelId);
 
-  const novel = await fetchNovel(pluginId, novelPath);
+  const novel = await fetchNovel(
+    pluginId,
+    novelPath,
+    isBackground ? { isBackground: true } : undefined,
+  );
 
   if (refreshNovelMetadata) {
     await updateNovelMetadata(pluginId, novelId, novel);
